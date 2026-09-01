@@ -40,16 +40,16 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 
 /* SDL includes: -----------------*/
-#include "SDL.h"
+#include <SDL3/SDL.h>
 
 #ifndef NOSOUND
-#include "SDL_mixer.h"
+#include <SDL3_mixer/SDL_mixer.h>
 #endif
 
-#include "SDL_image.h"
+#include <SDL3_image/SDL_image.h>
 
 #ifdef HAVE_LIBSDL_NET
-#include "SDL_net.h"
+#include <SDL3_net/SDL_net.h>
 #endif
 
 /* C library includes: -----------------*/
@@ -210,7 +210,7 @@ void print_locale_info(FILE* fp)
 void initialize_options(void)
 {
     /* Initialize MathCards backend for math questions: */
-    local_game = (MC_MathGame*) malloc(sizeof(MC_MathGame));
+    local_game = (MC_MathGame*) calloc(1, sizeof(MC_MathGame));
     if (local_game == NULL)
     {
         fprintf(stderr, "\nUnable to allocate MC_MathGame\n");
@@ -224,7 +224,7 @@ void initialize_options(void)
     }
 
 
-    lan_game_settings = (MC_MathGame*) malloc(sizeof(MC_MathGame));
+    lan_game_settings = (MC_MathGame*) calloc(1, sizeof(MC_MathGame));
     if (lan_game_settings == NULL)
     {
         fprintf(stderr, "\nUnable to allocate MC_MathGame\n");
@@ -668,10 +668,6 @@ void initialize_SDL(void)
 {
     //NOTE - SDL_Init() and friends now in InitT4KCommon()
 
-    // Audio parameters
-    int frequency, channels, n_timesopened;
-    Uint16 format;
-
     /* Init common library */
     if(!InitT4KCommon(debug_status))
     {
@@ -689,25 +685,22 @@ void initialize_SDL(void)
 #ifndef NOSOUND
     if (Opts_GetGlobalOpt(USE_SOUND))
     {
-        if (Mix_OpenAudio(MIX_DEFAULT_FREQUENCY, AUDIO_S16SYS, 2, 2048) < 0)
+        if (SDL_InitSubSystem(SDL_INIT_AUDIO) < 0)
         {
             fprintf(stderr,
-                    "\nWarning: I could not set up audio for 44100 Hz "
-                    "16-bit stereo.\n"
+                    "\nWarning: I could not initialize SDL audio.\n"
                     "The Simple DirectMedia error that occured was:\n"
                     "%s\n\n", SDL_GetError());
-
         }
-        n_timesopened = Mix_QuerySpec(&frequency,&format,&channels);
-        if (n_timesopened > 0)
-            Opts_SetSoundHWAvailable(1);
         else
-            frequency = format = channels = 0; //more helpful than garbage
-        DEBUGMSG(debug_setup, "Sound mixer: frequency = %d, "
-                "format = %x, "
-                "channels = %d, "
-                "n_timesopened = %d\n",
-                frequency,format,channels,n_timesopened);
+        {
+            MIX_Init();
+            if (T4K_GetAudioMixer() != NULL)
+                Opts_SetSoundHWAvailable(1);
+            else
+                fprintf(stderr, "\nWarning: Could not create audio mixer.\n");
+        }
+        DEBUGMSG(debug_setup, "Sound mixer available: %d\n", Opts_SoundHWAvailable());
     }
 #endif
     /* If couldn't set up sound, deselect sound options: */
@@ -722,65 +715,95 @@ void initialize_SDL(void)
 
 
     {
-        const SDL_VideoInfo *videoInfo;
-        Uint32 surfaceMode;
-        videoInfo = SDL_GetVideoInfo();
-        if (videoInfo->hw_available)
-        {
-            surfaceMode = SDL_HWSURFACE;
-            DEBUGMSG(debug_setup, "HW mode\n");
-        }
-        else
-        {
-            surfaceMode = SDL_SWSURFACE;
-            DEBUGMSG(debug_setup, "SW mode\n");
-        }
+        SDL_DisplayID display_id;
+        const SDL_DisplayMode *mode;
+
+        display_id = SDL_GetPrimaryDisplay();
+        mode = display_id ? SDL_GetDesktopDisplayMode(display_id) : NULL;
 
         // Determine the current resolution: this will be used as the
         // fullscreen resolution, if the user wants fullscreen.
-        DEBUGMSG(debug_setup, "Current resolution: w %d, h %d.\n",videoInfo->current_w,videoInfo->current_h);
+        if (mode)
+            DEBUGMSG(debug_setup, "Current resolution: w %d, h %d.\n", mode->w, mode->h);
         if (Opts_GetGlobalOpt(FULLSCREEN) && Opts_CustomRes()) {
           fs_res_x = Opts_WindowWidth();
           fs_res_y = Opts_WindowHeight();
           DEBUGMSG(debug_setup, "Full screen mode custom resolution: w %d, h %d.\n",fs_res_x,fs_res_y);
-        } else {
-          fs_res_x = videoInfo->current_w;
-          fs_res_y = videoInfo->current_h;
+        } else if (mode) {
+          fs_res_x = mode->w;
+          fs_res_y = mode->h;
         }
 
-        if (Opts_GetGlobalOpt(FULLSCREEN))
         {
-            screen = SDL_SetVideoMode(fs_res_x, fs_res_y, PIXEL_BITS, SDL_FULLSCREEN | surfaceMode);
-            if (screen == NULL)
+            SDL_Window* win = NULL;
+            SDL_Renderer* ren = NULL;
+            Uint32 window_flags = 0;
+            int w, h;
+
+            if (Opts_GetGlobalOpt(FULLSCREEN))
+            {
+                window_flags |= SDL_WINDOW_FULLSCREEN;
+                w = fs_res_x;
+                h = fs_res_y;
+            }
+            else
+            {
+                w = Opts_WindowWidth();
+                h = Opts_WindowHeight();
+            }
+
+            win = SDL_CreateWindow("Tux, of Math Command", w, h, window_flags);
+            if (!win && (window_flags & SDL_WINDOW_FULLSCREEN))
             {
                 fprintf(stderr,
                         "\nWarning: I could not open the display in fullscreen mode.\n"
                         "The Simple DirectMedia error that occured was:\n"
                         "%s\n\n", SDL_GetError());
                 Opts_SetGlobalOpt(FULLSCREEN, 0);
+                window_flags &= ~SDL_WINDOW_FULLSCREEN;
+                w = Opts_WindowWidth();
+                h = Opts_WindowHeight();
+                win = SDL_CreateWindow("Tux, of Math Command", w, h, window_flags);
             }
+
+            if (!win)
+            {
+                fprintf(stderr,
+                        "\nError: I could not open the display.\n"
+                        "The Simple DirectMedia error that occured was:\n"
+                        "%s\n\n", SDL_GetError());
+                cleanup_on_error();
+                exit(1);
+            }
+
+            ren = SDL_CreateRenderer(win, NULL);
+            if (!ren)
+            {
+                fprintf(stderr,
+                        "\nError: I could not create the renderer.\n"
+                        "The Simple DirectMedia error that occured was:\n"
+                        "%s\n\n", SDL_GetError());
+                cleanup_on_error();
+                exit(1);
+            }
+
+            T4K_SetWindowAndRenderer(win, ren);
+
+            screen = SDL_CreateSurface(w, h, SDL_PIXELFORMAT_ARGB8888);
+            if (screen == NULL)
+            {
+                fprintf(stderr,
+                        "\nError: I could not create the screen surface.\n"
+                        "The Simple DirectMedia error that occured was:\n"
+                        "%s\n\n", SDL_GetError());
+                cleanup_on_error();
+                exit(1);
+            }
+
+            seticon();
+
+
         }
-
-        if (!Opts_GetGlobalOpt(FULLSCREEN))
-        {
-            screen = SDL_SetVideoMode(Opts_WindowWidth(), Opts_WindowHeight(), PIXEL_BITS, surfaceMode);
-        }
-
-        if (screen == NULL)
-        {
-            fprintf(stderr,
-                    "\nError: I could not open the display.\n"
-                    "The Simple DirectMedia error that occured was:\n"
-                    "%s\n\n", SDL_GetError());
-            cleanup_on_error();
-            exit(1);
-        }
-
-        seticon();
-
-        SDL_WM_SetCaption("Tux, of Math Command", "TuxMath");
-
-
     }
 }
 
@@ -884,7 +907,7 @@ void cleanup_memory(void)
     for (i = 0; i < NUM_IMAGES; i++)
     {
         if (images[i])
-            SDL_FreeSurface(images[i]);
+            SDL_DestroySurface(images[i]);
         images[i] = NULL;
     }
 
@@ -898,14 +921,14 @@ void cleanup_memory(void)
     for (i = 0; i < NUM_SOUNDS; i++)
     {
         if (sounds[i])
-            Mix_FreeChunk(sounds[i]);
+            MIX_DestroyAudio(sounds[i]);
         sounds[i] = NULL;
     }
 
     for (i = 0; i < NUM_MUSICS; i++)
     {
         if (musics[i])
-            Mix_FreeMusic(musics[i]);
+            MIX_DestroyAudio(musics[i]);
         musics[i] = NULL;
     }
 
@@ -970,10 +993,7 @@ void cleanup_memory(void)
 
 void seticon(void)
 {
-    int masklen;
-    Uint8* mask;
     SDL_Surface* icon;
-
 
     /* Load icon into a surface: */
     icon = IMG_Load(DATA_PREFIX "/images/icons/icon.png");
@@ -986,17 +1006,11 @@ void seticon(void)
         return;
     }
 
-    /* Create mask: */
-    masklen = (((icon -> w) + 7) / 8) * (icon -> h);
-    mask = malloc(masklen * sizeof(Uint8));
-    memset(mask, 0xFF, masklen);
-
     /* Set icon: */
-    SDL_WM_SetIcon(icon, mask);
+    SDL_SetWindowIcon(T4K_GetWindow(), icon);
 
-    /* Free icon surface & mask: */
-    free(mask);
-    SDL_FreeSurface(icon);
+    /* Free icon surface: */
+    SDL_DestroySurface(icon);
 }
 
 

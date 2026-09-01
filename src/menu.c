@@ -25,6 +25,7 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
 
 
 
+#include "comets.h"
 #include "globals.h"
 #include "menu.h"
 #include "titlescreen.h"
@@ -530,6 +531,7 @@ int run_lan_host(void)
 int stop_lan_host(void)
 {
     DEBUGMSG(debug_lan|debug_menu, "Entering stop_lan_join()\n");
+#ifdef HAVE_LIBSDL_NET
     if(!OurServerRunning())
     {
         ShowMessageWrap(DEFAULT_MENU_FONT_SIZE, _("The server is not running."));
@@ -545,6 +547,10 @@ int stop_lan_host(void)
     ShowMessageWrap(DEFAULT_MENU_FONT_SIZE, _("The server has been stopped."));
 
     return 1;
+#else
+    ShowMessageWrap(DEFAULT_MENU_FONT_SIZE, _("The server is not running."));
+    return 0;
+#endif
 }
 
 
@@ -642,7 +648,7 @@ int RunLoginMenu(void)
     int level;
     int i;
     char *trailer = NULL;
-    SDLMod mod;
+    SDL_Keymod mod;
 
     DEBUGMSG(debug_menu, "Entering RunLoginMenu()");
     // Check for & read user_login_questions file
@@ -706,7 +712,7 @@ int RunLoginMenu(void)
         user_names = NULL;
         // If the CTRL key was pressed, choose this as the identity, even
         // if there is a lower level to the hierarchy
-        if (mod & KMOD_CTRL)
+        if (mod & SDL_KMOD_CTRL)
             break;
         // Set the title appropriately for the next menu
         if (level < n_login_questions)

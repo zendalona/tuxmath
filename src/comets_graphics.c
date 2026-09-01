@@ -1,8 +1,11 @@
 #include "comets_graphics.h"
 
+#include <stdio.h>
+#include "draw_utils.h"
 #include "fileops.h"
 #include "frame_counter.h"
 #include "globals.h"
+#include "network.h"
 #include "options.h"
 #include "multiplayer.h"
 #include "tuxmath.h"
@@ -34,13 +37,13 @@ void comets_draw_background(SDL_Surface *bkgd, int wave)
         dest.w = screen->w;
         dest.h = ((screen->h) / 4) * 3;
 
-        SDL_FillRect(screen, &dest, bgcolor);
+        SDL_FillSurfaceRect(screen, &dest, bgcolor);
 
 
         dest.y = ((screen->h) / 4) * 3;
         dest.h = (screen->h) / 4;
 
-        SDL_FillRect(screen, &dest, fgcolor);
+        SDL_FillSurfaceRect(screen, &dest, fgcolor);
     }
 
     if (bkgd)
@@ -316,7 +319,7 @@ void comets_draw_misc(MC_MathGame *curr_game, int wave,
         dest.h = images[IMG_EXTRA_LIFE]->h/2;
         dest.w = ((Opts_BonusCometInterval() + 1 - bonus_comet_counter)
                 * images[IMG_EXTRA_LIFE]->w) / Opts_BonusCometInterval();
-        SDL_FillRect(screen, &dest, SDL_MapRGB(screen->format, 0, 255, 0));
+        SDL_FillSurfaceRect(screen, &dest, SDL_MapRGB(screen->format, 0, 255, 0));
     }
 
     /* Draw wave: */
@@ -347,11 +350,13 @@ void comets_draw_misc(MC_MathGame *curr_game, int wave,
         SDL_BlitSurface(images[IMG_SCORE], NULL, screen, &dest);
 
         /* In LAN mode, we show the server-generated score: */
+#ifdef HAVE_LIBSDL_NET
         if(Opts_LanMode())
         {
             sprintf(str, "%.6d", LAN_PlayerScore(LAN_MyIndex()));
         }
         else
+#endif
             sprintf(str, "%.6d", score);
 
         /* Draw score numbers: */
@@ -380,12 +385,13 @@ void comets_draw_misc(MC_MathGame *curr_game, int wave,
                 loc.h = score_surf->h;
 
                 SDL_BlitSurface(score_surf, NULL, screen, &loc);
-                SDL_FreeSurface(score_surf);
+                SDL_DestroySurface(score_surf);
                 score_surf = NULL;
             }
         }
     }
 
+#ifdef HAVE_LIBSDL_NET
     /* Draw other players' scores (LAN game) */
     if (Opts_LanMode())
     {
@@ -413,12 +419,13 @@ void comets_draw_misc(MC_MathGame *curr_game, int wave,
                     loc.y = score_surf->h * (entries + 2);
                     SDL_BlitSurface(score_surf, NULL, screen, &loc);
                     entries++;
-                    SDL_FreeSurface(score_surf);
+                    SDL_DestroySurface(score_surf);
                     score_surf = NULL;
                 }
             }
         }
     }
+#endif
 
     /* Draw stop button: */
     if (!help_controls->x_is_blinking || (FC_sprite_counter % 10 < 5)) {
@@ -645,7 +652,7 @@ void comets_draw_smartbomb(int smartbomb_alive)
     {
         rect.y += rect.h;
         SDL_BlitSurface(img, NULL, screen, &rect);
-        SDL_FreeSurface(img);
+        SDL_DestroySurface(img);
     }
 }
 
