@@ -34,10 +34,55 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #include <stdio.h>
 #include <stdlib.h>
 
+#ifdef WIN32
+#  include <SDL3/SDL.h>
+#  include <direct.h>
+#  include <windows.h>
+#elif defined(__APPLE__)
+#  include <SDL3/SDL.h>
+#  include <unistd.h>
+#endif
+
 char wrapped_lines[MAX_LINES][MAX_LINEWIDTH];
+
+#ifdef _WIN32
+static LONG WINAPI TuxMathCrashHandler(PEXCEPTION_POINTERS pExc)
+{
+    DWORD code = pExc->ExceptionRecord->ExceptionCode;
+    /* Ignore normal C++ exceptions (0xE06D7363) and thread naming / RPC exceptions */
+    if (code == 0xE06D7363 || code == 0x406D1388 || code == 0x000006BA || code == 0x40010006)
+        return EXCEPTION_CONTINUE_SEARCH;
+
+    fprintf(stderr, "\n========================================\n");
+    fprintf(stderr, "FATAL CRASH in TuxMath: Code 0x%08lX at Address %p\n",
+            (unsigned long)code,
+            pExc->ExceptionRecord->ExceptionAddress);
+    fprintf(stderr, "========================================\n");
+    fflush(stderr);
+    return EXCEPTION_CONTINUE_SEARCH;
+}
+#endif
 
 int main(int argc, char* argv[])
 {
+#ifdef _WIN32
+    AddVectoredExceptionHandler(1, TuxMathCrashHandler);
+#endif
+#if defined(WIN32) || defined(__APPLE__)
+    /* Set working directory to executable directory so relative paths work when launched from any CWD (e.g. MSIX or macOS bundle) */
+    {
+        const char *base = SDL_GetBasePath();
+        if (base)
+        {
+#ifdef WIN32
+            _chdir(base);
+            SetCurrentDirectoryA(base);
+#else
+            chdir(base);
+#endif
+        }
+    }
+#endif
     setup(argc, argv);
     TitleScreen();  /* Run the game! */
     cleanup();

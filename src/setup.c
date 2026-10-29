@@ -37,6 +37,7 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #include "titlescreen.h"
 #include "highscore.h"
 #include "mysetenv.h"
+#include "tts_toggle.h"
 
 
 /* SDL includes: -----------------*/
@@ -136,12 +137,25 @@ void setup(int argc, char * argv[])
     /* initialize settings and read in config files: */
     /* Note this now only does the global settings   */
     initialize_options();
+
+    /* Init espeak-ng FIRST so it opens its audio path before SDL3_mixer. */
+    T4K_Tts_init();
+
     /* Command-line code now in own function: */
     handle_command_args(argc, argv);
+
     /* initialize default user's options (for resolution)*/
     initialize_options_user();
     /* SDL setup in own function:*/
     initialize_SDL();
+
+    /* TTS initialized before SDL; now sync volume, voice, status, and register toggle callback */
+    T4K_Tts_set_volume(100);
+    T4K_Tts_set_voice("en");
+    T4K_Tts_set_status(Opts_GetGlobalOpt(USE_TTS));
+    /* NULL for braille: TuxMath does not support Braille output */
+    T4K_OnAccessibilityToggle(ToggleTTS, NULL);
+
     /* Read image and sound files: */
     load_data_files();
     /* Generate flipped versions of walking images */
@@ -171,10 +185,14 @@ void initialize_locale(const char* desired_loc)
     s3 = bind_textdomain_codeset(PACKAGE, "UTF-8");
     s4 = textdomain(PACKAGE);
 
-    strncpy(tuxmath_locale.setlocale_ret, s1, 64);
-    strncpy(tuxmath_locale.bindtextdomain_ret, s2, 64);
-    strncpy(tuxmath_locale.bind_textdomain_codeset_ret, s3, 64);
-    strncpy(tuxmath_locale.textdomain_ret, s4, 64);
+    if (s1) strncpy(tuxmath_locale.setlocale_ret, s1, 63);
+    else tuxmath_locale.setlocale_ret[0] = '\0';
+    if (s2) strncpy(tuxmath_locale.bindtextdomain_ret, s2, 63);
+    else tuxmath_locale.bindtextdomain_ret[0] = '\0';
+    if (s3) strncpy(tuxmath_locale.bind_textdomain_codeset_ret, s3, 63);
+    else tuxmath_locale.bind_textdomain_codeset_ret[0] = '\0';
+    if (s4) strncpy(tuxmath_locale.textdomain_ret, s4, 63);
+    else tuxmath_locale.textdomain_ret[0] = '\0';
 
     DEBUGCODE(debug_setup) print_locale_info(stderr);
 }
@@ -549,6 +567,7 @@ void handle_command_args(int argc, char* argv[])
                 {
                     Opts_SetWindowWidth(w);
                     Opts_SetWindowHeight(h);
+                    Opts_SetCustomRes(1);
                 }
             }
             ++i;
@@ -630,8 +649,6 @@ void handle_command_args(int argc, char* argv[])
         {
 			++i;
 			my_setenv("LANGUAGE",argv[i]);
-			/* initialize Tts */
-			T4K_Tts_init();
 			T4K_Tts_set_voice(argv[i]);
         }
 
@@ -724,14 +741,21 @@ void initialize_SDL(void)
         // Determine the current resolution: this will be used as the
         // fullscreen resolution, if the user wants fullscreen.
         if (mode)
+        {
+            fs_res_x = mode->w;
+            fs_res_y = mode->h;
             DEBUGMSG(debug_setup, "Current resolution: w %d, h %d.\n", mode->w, mode->h);
+        }
+        else
+        {
+            fs_res_x = DEFAULT_WINDOW_WIDTH;
+            fs_res_y = DEFAULT_WINDOW_HEIGHT;
+        }
+
         if (Opts_GetGlobalOpt(FULLSCREEN) && Opts_CustomRes()) {
-          fs_res_x = Opts_WindowWidth();
-          fs_res_y = Opts_WindowHeight();
-          DEBUGMSG(debug_setup, "Full screen mode custom resolution: w %d, h %d.\n",fs_res_x,fs_res_y);
-        } else if (mode) {
-          fs_res_x = mode->w;
-          fs_res_y = mode->h;
+            fs_res_x = Opts_WindowWidth();
+            fs_res_y = Opts_WindowHeight();
+            DEBUGMSG(debug_setup, "Full screen mode custom resolution: w %d, h %d.\n",fs_res_x,fs_res_y);
         }
 
         {
@@ -779,6 +803,11 @@ void initialize_SDL(void)
             ren = SDL_CreateRenderer(win, NULL);
             if (!ren)
             {
+                /* Fallback to software renderer if hardware Direct3D/D3D12 is unavailable (e.g. in VM/sandbox) */
+                ren = SDL_CreateRenderer(win, "software");
+            }
+            if (!ren)
+            {
                 fprintf(stderr,
                         "\nError: I could not create the renderer.\n"
                         "The Simple DirectMedia error that occured was:\n"
@@ -799,6 +828,15 @@ void initialize_SDL(void)
                 cleanup_on_error();
                 exit(1);
             }
+
+            T4K_SetScreen(screen);
+
+#ifdef HAVE_T4K_SETRESOLUTIONS
+            /* Sync window/fullscreen resolution info with updated t4kcommon.
+               Use the base 640x480 reference for windowed baseline so get_scale()
+               properly computes HD UI scaling on higher resolution screens. */
+            T4K_SetResolutions(DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT, fs_res_x, fs_res_y);
+#endif
 
             seticon();
 
@@ -911,6 +949,21 @@ void cleanup_memory(void)
         images[i] = NULL;
     }
 
+    for (i = 0; i < NUM_FLIPPED_IMAGES; i++)
+    {
+        if (flipped_images[i])
+            SDL_DestroySurface(flipped_images[i]);
+        flipped_images[i] = NULL;
+    }
+
+    for (i = 0; i < NUM_BLENDED_IGLOOS; i++)
+    {
+        /* Note: indices 6, 10, 14 are pointers to images[] which were already freed above */
+        if (i != 6 && i != 10 && i != 14 && blended_igloos[i])
+            SDL_DestroySurface(blended_igloos[i]);
+        blended_igloos[i] = NULL;
+    }
+
     for (i = 0; i < NUM_SPRITES; i++)
     {
         if (sprites[i])
@@ -918,6 +971,7 @@ void cleanup_memory(void)
         sprites[i] = NULL;
     }
 
+    T4K_AudioCleanup();
     for (i = 0; i < NUM_SOUNDS; i++)
     {
         if (sounds[i])
@@ -982,6 +1036,9 @@ void cleanup_memory(void)
         free(lan_game_settings);
         lan_game_settings = NULL;
     }
+
+    /* Free heap used by fileops (config paths, high score paths) */
+    cleanup_fileops();
 
     /* Cleanup SDL+friends and anything else used by t4k_common: */
     CleanupT4KCommon();

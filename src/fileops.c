@@ -43,10 +43,14 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
 
 
 /* OS includes - NOTE: these may not be very portable */
-#include <dirent.h>  /* for opendir() */
-#include <sys/stat.h>/* for mkdir() */
-#include <unistd.h>  /* for getcwd() */
-#include <sys/types.h> /* for umask() */
+#include <dirent.h>   /* for opendir() */
+#include <sys/stat.h> /* for mkdir() */
+#ifndef WIN32
+#  include <unistd.h>    /* for getcwd() — not available on MinGW/WIN32 */
+#  include <sys/types.h> /* for umask() */
+#else
+#  include <direct.h>    /* for _mkdir() on Windows */
+#endif
 
 /* Standard C includes: */
 #include <stdio.h>
@@ -272,10 +276,12 @@ int read_global_config_file(MC_MathGame* game)
 {
     FILE* fp;
 
-#ifdef BUILD_MINGW32
-    fp = fopen(DATA_PREFIX "/missions/options.txt", "r");
-#else
+    /* On UCRT64/modern MinGW build, data files have no .txt extension. */
+    /* Try without extension first (works for both Linux and this build). */
     fp = fopen(DATA_PREFIX "/missions/options", "r");
+#ifdef BUILD_MINGW32
+    if (!fp)
+        fp = fopen(DATA_PREFIX "/missions/options.txt", "r");
 #endif
 
     if (fp && game)
@@ -329,16 +335,10 @@ int read_named_config_file(MC_MathGame* game, const char* fn)
     FILE* fp;
     char opt_path[PATH_MAX];
 
-    /* Adjust fn extension for Windows, if needed: */
-#ifdef BUILD_MINGW32
-    char fn_tmp[PATH_MAX];
-    strncpy(fn_tmp, fn, PATH_MAX);
-    if(!strstr(fn_tmp, ".txt") && !strstr(fn_tmp, ".TXT")) //no strcasestr() in mingw
-        strcat(fn_tmp, ".txt");
-    const char* filename = (const char*)fn_tmp;
-#else
+    /* On the UCRT64/MinGW build the data files use NO .txt extension        */
+    /* (same as Linux). Use fn as-is. A .txt fallback is attempted later     */
+    /* inside each individual fopen() call only for bare (pathless) names.   */
     const char* filename = (const char*)fn;
-#endif
 
     if (!game)
         return 0;
@@ -567,6 +567,27 @@ int parse_lesson_file_directory(void)
     int lessonIterator = 0;  //Iterator over matching files in lesson dir
     int length = 0;
     int lessons = 0;         //Iterator over accepted (& parsed) lesson files
+    /* Free previous lesson lists if already allocated to prevent memory leak on user switch/login */
+    if (lesson_list_titles)
+    {
+        for (i = 0; i < num_lessons; i++)
+        {
+            if (lesson_list_titles[i])
+                free(lesson_list_titles[i]);
+        }
+        free(lesson_list_titles);
+        lesson_list_titles = NULL;
+    }
+    if (lesson_list_filenames)
+    {
+        for (i = 0; i < num_lessons; i++)
+        {
+            if (lesson_list_filenames[i])
+                free(lesson_list_filenames[i]);
+        }
+        free(lesson_list_filenames);
+        lesson_list_filenames = NULL;
+    }
 
     num_lessons = 0;
 
@@ -580,7 +601,11 @@ int parse_lesson_file_directory(void)
     DEBUGMSG(debug_fileops, "lesson_path is: %s\n", lesson_path);
 
     /* Believe we now have complete scandir() for all platforms :) */
+#ifdef BUILD_MINGW32
+    num_lessons = scandir(lesson_path, &lesson_list_dirents, (int (*)(struct dirent *))is_lesson_file, (int (*)(const void *, const void *))alphasort);
+#else
     num_lessons = scandir(lesson_path, &lesson_list_dirents, is_lesson_file, alphasort);
+#endif
 
     DEBUGMSG(debug_fileops, "num_lessons is: %d\n", num_lessons);
 
@@ -627,10 +652,10 @@ int parse_lesson_file_directory(void)
             continue;
         }
         fgets_return_val = fgets(name_buf, NAME_BUF_SIZE, tempFile);
+        fclose(tempFile);
         if (fgets_return_val == NULL) {
             continue;
         }
-        fclose(tempFile);
 
 
         /* check to see if it has a \r at the end of it (dos format!) */
@@ -2442,6 +2467,51 @@ static int str_to_bool(const char* val)
         return 1;
     else
         return 0;
+}
+
+void cleanup_fileops(void)
+{
+    if (high_scores_file_path)
+    {
+        free(high_scores_file_path);
+        high_scores_file_path = NULL;
+    }
+    if (last_config_file_name)
+    {
+        free(last_config_file_name);
+        last_config_file_name = NULL;
+    }
+    if (user_data_dir)
+    {
+        free(user_data_dir);
+        user_data_dir = NULL;
+    }
+    if (lesson_list_goldstars)
+    {
+        free(lesson_list_goldstars);
+        lesson_list_goldstars = NULL;
+    }
+    if (lesson_list_titles)
+    {
+        for (int i = 0; i < num_lessons; i++)
+        {
+            if (lesson_list_titles[i])
+                free(lesson_list_titles[i]);
+        }
+        free(lesson_list_titles);
+        lesson_list_titles = NULL;
+    }
+    if (lesson_list_filenames)
+    {
+        for (int i = 0; i < num_lessons; i++)
+        {
+            if (lesson_list_filenames[i])
+                free(lesson_list_filenames[i]);
+        }
+        free(lesson_list_filenames);
+        lesson_list_filenames = NULL;
+    }
+    num_lessons = 0;
 }
 
 
